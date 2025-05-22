@@ -15,7 +15,7 @@ export default async function ContentWriterAgent(
     // Create a content writer agent using Mastra
     const contentAgent = new Agent({
       name: 'ContentWriter',
-      instructions: `You are an expert blog writer that creates well-structured, informative content.`,
+      instructions: 'You are an expert blog writer that creates well-structured, informative content.',
       model: openai('gpt-4o-mini'),
     });
 

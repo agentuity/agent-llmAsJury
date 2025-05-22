@@ -130,7 +130,7 @@ export default async function JuryAgent(
         
         // Handle Claude API response carefully to avoid type errors
         try {
-          if (claudeResponse && claudeResponse.content && Array.isArray(claudeResponse.content) && claudeResponse.content.length > 0) {
+          if (claudeResponse?.content && Array.isArray(claudeResponse.content) && claudeResponse.content.length > 0) {
             // Claude API returns content as an array of blocks
             const firstContent = claudeResponse.content[0];
             
@@ -285,30 +285,30 @@ function extractScores(text: string): { clarity: number; structure: number; enga
   
   // Try to find each score in the text using regex
   const clarityMatch = text.match(/clarity:?\s*(\d+(\.\d+)?)\s*\/\s*10/i);
-  if (clarityMatch && clarityMatch[1]) {
-    scores.clarity = parseFloat(clarityMatch[1]);
+  if (clarityMatch?.[1]) {
+    scores.clarity = Number.parseFloat(clarityMatch[1]);
   }
   
   const structureMatch = text.match(/structure:?\s*(\d+(\.\d+)?)\s*\/\s*10/i);
-  if (structureMatch && structureMatch[1]) {
-    scores.structure = parseFloat(structureMatch[1]);
+  if (structureMatch?.[1]) {
+    scores.structure = Number.parseFloat(structureMatch[1]);
   }
   
   const engagementMatch = text.match(/engagement:?\s*(\d+(\.\d+)?)\s*\/\s*10/i);
-  if (engagementMatch && engagementMatch[1]) {
-    scores.engagement = parseFloat(engagementMatch[1]);
+  if (engagementMatch?.[1]) {
+    scores.engagement = Number.parseFloat(engagementMatch[1]);
   }
   
   const technicalMatch = text.match(/technical:?\s*(\d+(\.\d+)?)\s*\/\s*10/i) || 
                          text.match(/technical accuracy:?\s*(\d+(\.\d+)?)\s*\/\s*10/i) ||
                          text.match(/accuracy:?\s*(\d+(\.\d+)?)\s*\/\s*10/i);
-  if (technicalMatch && technicalMatch[1]) {
-    scores.technical = parseFloat(technicalMatch[1]);
+  if (technicalMatch?.[1]) {
+    scores.technical = Number.parseFloat(technicalMatch[1]);
   }
   
   const overallMatch = text.match(/overall:?\s*(\d+(\.\d+)?)\s*\/\s*10/i);
-  if (overallMatch && overallMatch[1]) {
-    scores.overall = parseFloat(overallMatch[1]);
+  if (overallMatch?.[1]) {
+    scores.overall = Number.parseFloat(overallMatch[1]);
   }
   
   return scores;
