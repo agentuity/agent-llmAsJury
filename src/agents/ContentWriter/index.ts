@@ -2,6 +2,17 @@ import type { AgentRequest, AgentResponse, AgentContext } from '@agentuity/sdk';
 import { Agent } from '@mastra/core/agent';
 import { openai } from '@ai-sdk/openai';
 
+export const welcome = () => {
+  return {
+    welcome: `Welcome to the Multi-Model AI Jury! 🏛️
+
+This system evaluates your content using multiple AI models (GPT-4o Mini, GPT-4, and Claude) to provide a balanced, consensus-based assessment.
+
+Enter in a topic and I will generate a blog post about it, along with a score from the jury!.`,
+   
+  };
+};
+
 export default async function ContentWriterAgent(
   req: AgentRequest,
   resp: AgentResponse,

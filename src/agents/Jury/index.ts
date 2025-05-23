@@ -2,6 +2,7 @@ import type { AgentRequest, AgentResponse, AgentContext } from '@agentuity/sdk';
 import { Agent } from '@mastra/core/agent';
 import { openai } from '@ai-sdk/openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
 
 // Initialize Anthropic client for Claude
 // Note: This requires an API key to be set as an environment variable
@@ -11,6 +12,18 @@ try {
 } catch (error) {
   console.error('Failed to initialize Anthropic client. Claude evaluation will be skipped.');
 }
+
+// Define the evaluation schema for structured output
+const evaluationSchema = z.object({
+  clarity: z.number().min(1).max(10).describe('Score for clarity (1-10)'),
+  structure: z.number().min(1).max(10).describe('Score for structure (1-10)'), 
+  engagement: z.number().min(1).max(10).describe('Score for engagement (1-10)'),
+  technical: z.number().min(1).max(10).describe('Score for technical accuracy (1-10)'),
+  overall: z.number().min(1).max(10).describe('Overall score (1-10)'),
+  explanation: z.string().describe('Detailed explanation of the evaluation with reasoning for each score')
+});
+
+type EvaluationResult = z.infer<typeof evaluationSchema>;
 
 export const welcome = () => {
   return {
@@ -59,8 +72,18 @@ export default async function JuryAgent(
     - Engagement: How engaging and interesting is the content?
     - Technical accuracy: How factually accurate is the content?
     
-    For each criterion, provide a score out of 10 and a brief explanation.
-    End with an overall score that averages all criteria.
+    For each criterion, provide a score out of 10. Also provide an overall score that averages all criteria.
+    
+    For the explanation, use this exact format:
+    "Clarity: [Brief 1-2 sentence explanation of clarity score]
+    
+    Structure: [Brief 1-2 sentence explanation of structure score]
+    
+    Engagement: [Brief 1-2 sentence explanation of engagement score]
+    
+    Technical Accuracy: [Brief 1-2 sentence explanation of technical score]
+    
+    Overall: [Brief summary of overall assessment]"
     
     Content to evaluate:
     ${blogPost}
@@ -82,51 +105,55 @@ export default async function JuryAgent(
     });
     
     // Array to collect model evaluations
-    const modelEvaluations: Array<{name: string; evaluation: string}> = [];
-    const modelScores: Array<{clarity: number; structure: number; engagement: number; technical: number; overall: number}> = [];
+    const modelEvaluations: Array<{name: string; evaluation: EvaluationResult}> = [];
     
-    // Run OpenAI model evaluations in parallel
+    // Run OpenAI model evaluations in parallel with structured output
     const [gpt4oMiniResult, gpt4Result] = await Promise.all([
-      gpt4oMiniJudge.generate(evaluationPrompt),
-      gpt4Judge.generate(evaluationPrompt)
+      gpt4oMiniJudge.generate(evaluationPrompt, { output: evaluationSchema }),
+      gpt4Judge.generate(evaluationPrompt, { output: evaluationSchema })
     ]);
     
     // Add OpenAI model results
     modelEvaluations.push({
       name: 'GPT-4o Mini',
-      evaluation: gpt4oMiniResult.text
+      evaluation: gpt4oMiniResult.object as EvaluationResult
     });
     
     modelEvaluations.push({
       name: 'GPT-4',
-      evaluation: gpt4Result.text
+      evaluation: gpt4Result.object as EvaluationResult
     });
-    
-    // Extract scores from OpenAI models
-    const gpt4oMiniScores = extractScores(gpt4oMiniResult.text);
-    const gpt4Scores = extractScores(gpt4Result.text);
-    
-    modelScores.push(gpt4oMiniScores);
-    modelScores.push(gpt4Scores);
     
     // Check if Claude is available and use it
     if (anthropicClient) {
       try {
-        // Use Claude API directly
+        // Use Claude API directly with request for JSON output
         const claudeResponse = await anthropicClient.messages.create({
           model: 'claude-3-haiku-20240307',
           max_tokens: 1024,
-          system: 'You are a critical evaluator of written content focused on stylistic elements and clarity.',
+          system: 'You are a critical evaluator of written content. You MUST respond with ONLY valid JSON - no additional text, explanations, or formatting. Return only the JSON object.',
           messages: [
             {
               role: 'user',
-              content: evaluationPrompt
+              content: `${evaluationPrompt}
+
+IMPORTANT: Respond with ONLY valid JSON. Do not include any text before or after the JSON. Do not use markdown formatting.
+
+Required JSON format:
+{
+  "clarity": 7.5,
+  "structure": 8.0,
+  "engagement": 6.0,
+  "technical": 9.0,
+  "overall": 7.6,
+  "explanation": "Clarity: Brief explanation.\\n\\nStructure: Brief explanation.\\n\\nEngagement: Brief explanation.\\n\\nTechnical Accuracy: Brief explanation.\\n\\nOverall: Brief summary."
+}`
             }
           ]
         });
         
         // Safely extract Claude's text response
-        let claudeText = 'Claude evaluation completed, but the response format could not be processed.';
+        let claudeText = '';
         
         // Handle Claude API response carefully to avoid type errors
         try {
@@ -143,46 +170,104 @@ export default async function JuryAgent(
           ctx.logger.error('Error parsing Claude response:', parseError);
         }
         
+        // Try to parse Claude's JSON response
+        let claudeEvaluation: EvaluationResult;
+        try {
+          // First, try to extract JSON from Claude's response if it's wrapped in other text
+          let jsonString = claudeText.trim();
+          
+          // Look for JSON object boundaries
+          const jsonStart = jsonString.indexOf('{');
+          const jsonEnd = jsonString.lastIndexOf('}');
+          
+          if (jsonStart !== -1 && jsonEnd !== -1) {
+            jsonString = jsonString.substring(jsonStart, jsonEnd + 1);
+          }
+          
+          const parsedResponse = JSON.parse(jsonString);
+          
+          // Validate and clean the explanation to prevent JSON issues
+          let explanation = String(parsedResponse.explanation || '');
+          if (explanation.length > 2000) {
+            explanation = explanation.substring(0, 2000) + '...';
+          }
+          
+          claudeEvaluation = {
+            clarity: Number(parsedResponse.clarity) || 0,
+            structure: Number(parsedResponse.structure) || 0,
+            engagement: Number(parsedResponse.engagement) || 0,
+            technical: Number(parsedResponse.technical) || 0,
+            overall: Number(parsedResponse.overall) || 0,
+            explanation: explanation
+          };
+        } catch (jsonError) {
+          ctx.logger.error('Error parsing Claude JSON response:', jsonError);
+          ctx.logger.error('Claude raw response:', claudeText.substring(0, 500)); // Log first 500 chars
+          
+          // If JSON parsing fails, create a fallback evaluation with default scores
+          claudeEvaluation = {
+            clarity: 0,
+            structure: 0,
+            engagement: 0,
+            technical: 0,
+            overall: 0,
+            explanation: `Claude evaluation could not be parsed as structured data. This usually means Claude's response contained formatting issues. Raw response preview: ${claudeText.substring(0, 200)}...`
+          };
+        }
+        
         // Add Claude result
         modelEvaluations.push({
           name: 'Claude (Anthropic)',
-          evaluation: claudeText
+          evaluation: claudeEvaluation
         });
-        
-        // Extract Claude scores if we have a response
-        if (claudeText && claudeText.length > 0) {
-          const claudeScores = extractScores(claudeText);
-          modelScores.push(claudeScores);
-        }
       } catch (error) {
         ctx.logger.error('Error using Claude API:', error);
         modelEvaluations.push({
           name: 'Claude (Anthropic) - Error',
-          evaluation: 'Claude evaluation failed. This model may require API credentials to be configured.'
+          evaluation: {
+            clarity: 0,
+            structure: 0,
+            engagement: 0,
+            technical: 0,
+            overall: 0,
+            explanation: 'Claude evaluation failed. This model may require API credentials to be configured.'
+          } as EvaluationResult
         });
       }
     } else {
       modelEvaluations.push({
         name: 'Claude (Anthropic) - Not Available',
-        evaluation: 'Claude evaluation was skipped. This model requires API credentials to be configured.'
+        evaluation: {
+          clarity: 0,
+          structure: 0,
+          engagement: 0,
+          technical: 0,
+          overall: 0,
+          explanation: 'Claude evaluation was skipped. This model requires API credentials to be configured.'
+        } as EvaluationResult
       });
     }
     
     // Calculate average scores across available models
-    const totalModels = modelScores.length;
-    const avgClarity = modelScores.reduce((sum, model) => sum + model.clarity, 0) / totalModels;
-    const avgStructure = modelScores.reduce((sum, model) => sum + model.structure, 0) / totalModels;
-    const avgEngagement = modelScores.reduce((sum, model) => sum + model.engagement, 0) / totalModels;
-    const avgTechnical = modelScores.reduce((sum, model) => sum + model.technical, 0) / totalModels;
+    const validEvaluations = modelEvaluations.filter(model => 
+      !model.name.includes('Not Available') && 
+      !model.name.includes('Error') && 
+      model.evaluation.overall > 0
+    );
+    
+    const totalModels = validEvaluations.length;
+    const avgClarity = validEvaluations.reduce((sum, model) => sum + model.evaluation.clarity, 0) / totalModels;
+    const avgStructure = validEvaluations.reduce((sum, model) => sum + model.evaluation.structure, 0) / totalModels;
+    const avgEngagement = validEvaluations.reduce((sum, model) => sum + model.evaluation.engagement, 0) / totalModels;
+    const avgTechnical = validEvaluations.reduce((sum, model) => sum + model.evaluation.technical, 0) / totalModels;
     
     // Calculate overall average score
     const overallScore = ((avgClarity + avgStructure + avgEngagement + avgTechnical) / 4).toFixed(1);
     
     // Start with the article itself
     let formattedResponse = `
-=======================================================================
-                         ARTICLE TO EVALUATE                          
-=======================================================================
+ARTICLE TO EVALUATE
+-------------------
 
 ${blogPost}
 
@@ -190,20 +275,19 @@ ${blogPost}
 
     // Add the evaluation header
     formattedResponse += `
-=======================================================================
-                    MULTI-MODEL AI JURY EVALUATION                    
-=======================================================================
+MULTI-MODEL AI JURY EVALUATION
+-------------------------------
+
 `;
 
     // Add topic information if provided by ContentWriter
     if (isHandoff && topic) {
-      formattedResponse += `
-TOPIC: ${topic}
+      formattedResponse += `Topic: ${topic}
+
 `;
     }
 
-    formattedResponse += `
-OVERALL CONSENSUS SCORE: ${overallScore}/10
+    formattedResponse += `Overall Consensus Score: ${overallScore}/10
 
 `;
 
@@ -214,55 +298,36 @@ OVERALL CONSENSUS SCORE: ${overallScore}/10
         return;
       }
 
-      // Add scores for this model if available
-      let modelScoresText = '';
-      if (index < modelScores.length) {
-        // Make sure we get the score object safely
-        const scoreObj = modelScores[index] || {
-          clarity: 0,
-          structure: 0,
-          engagement: 0,
-          technical: 0,
-          overall: 0
-        };
-        
-        modelScoresText = `
-· Clarity: ${scoreObj.clarity.toFixed(1)}/10
-· Structure: ${scoreObj.structure.toFixed(1)}/10
-· Engagement: ${scoreObj.engagement.toFixed(1)}/10
-· Technical: ${scoreObj.technical.toFixed(1)}/10
-· Overall: ${scoreObj.overall.toFixed(1)}/10
-`;
-      }
-
       formattedResponse += `
-=======================================================================
-${index + 1}. EVALUATION BY: ${model.name.toUpperCase()}
-=======================================================================
-${modelScoresText}
-${model.evaluation}
+${index + 1}. ${model.name.toUpperCase()}
+${'-'.repeat(model.name.length + 3)}
+
+Scores:
+  Clarity: ${model.evaluation.clarity.toFixed(1)}/10
+  Structure: ${model.evaluation.structure.toFixed(1)}/10
+  Engagement: ${model.evaluation.engagement.toFixed(1)}/10
+  Technical: ${model.evaluation.technical.toFixed(1)}/10
+  Overall: ${model.evaluation.overall.toFixed(1)}/10
+
+${model.evaluation.explanation}
 
 `;
     });
     
     // Add consensus scores
     formattedResponse += `
-=======================================================================
-                       CONSENSUS SCORES SUMMARY                       
-=======================================================================
-· Clarity:          ${avgClarity.toFixed(1)}/10
-· Structure:        ${avgStructure.toFixed(1)}/10 
-· Engagement:       ${avgEngagement.toFixed(1)}/10
-· Technical:        ${avgTechnical.toFixed(1)}/10
-· OVERALL AVERAGE:  ${overallScore}/10
+CONSENSUS SUMMARY
+-----------------
+
+  Clarity:      ${avgClarity.toFixed(1)}/10
+  Structure:    ${avgStructure.toFixed(1)}/10 
+  Engagement:   ${avgEngagement.toFixed(1)}/10
+  Technical:    ${avgTechnical.toFixed(1)}/10
+  Overall Avg:  ${overallScore}/10
 `;
 
     // Add source information for transparency
-    if (isHandoff) {
-      formattedResponse += `
-
-This evaluation was requested automatically by the ContentWriter agent.`;
-    }
+   
     
     // Return formatted text response
     return resp.text(formattedResponse);
@@ -272,44 +337,3 @@ This evaluation was requested automatically by the ContentWriter agent.`;
   }
 }
 
-// Extract individual criteria scores from the evaluation text
-function extractScores(text: string): { clarity: number; structure: number; engagement: number; technical: number; overall: number } {
-  // Default scores in case we can't extract them
-  const scores = {
-    clarity: 5,
-    structure: 5,
-    engagement: 5,
-    technical: 5,
-    overall: 5
-  };
-  
-  // Try to find each score in the text using regex
-  const clarityMatch = text.match(/clarity:?\s*(\d+(\.\d+)?)\s*\/\s*10/i);
-  if (clarityMatch?.[1]) {
-    scores.clarity = Number.parseFloat(clarityMatch[1]);
-  }
-  
-  const structureMatch = text.match(/structure:?\s*(\d+(\.\d+)?)\s*\/\s*10/i);
-  if (structureMatch?.[1]) {
-    scores.structure = Number.parseFloat(structureMatch[1]);
-  }
-  
-  const engagementMatch = text.match(/engagement:?\s*(\d+(\.\d+)?)\s*\/\s*10/i);
-  if (engagementMatch?.[1]) {
-    scores.engagement = Number.parseFloat(engagementMatch[1]);
-  }
-  
-  const technicalMatch = text.match(/technical:?\s*(\d+(\.\d+)?)\s*\/\s*10/i) || 
-                         text.match(/technical accuracy:?\s*(\d+(\.\d+)?)\s*\/\s*10/i) ||
-                         text.match(/accuracy:?\s*(\d+(\.\d+)?)\s*\/\s*10/i);
-  if (technicalMatch?.[1]) {
-    scores.technical = Number.parseFloat(technicalMatch[1]);
-  }
-  
-  const overallMatch = text.match(/overall:?\s*(\d+(\.\d+)?)\s*\/\s*10/i);
-  if (overallMatch?.[1]) {
-    scores.overall = Number.parseFloat(overallMatch[1]);
-  }
-  
-  return scores;
-}
