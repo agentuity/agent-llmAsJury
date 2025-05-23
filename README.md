@@ -64,9 +64,7 @@ A multi-model evaluation system that provides balanced assessment using:
 **Default Models:**
 - **GPT-4o Mini**: Precise and thorough evaluator
 - **GPT-4o**: Critical and detailed evaluator focused on technical merits
-
-**Optional Models:**
-- **Claude**: Add by setting `ANTHROPIC_API_KEY` environment variable
+- **Claude**: Pretty cool model I can't lie
 
 **Evaluation Criteria:**
 - Clarity
@@ -74,11 +72,6 @@ A multi-model evaluation system that provides balanced assessment using:
 - Engagement
 - Technical accuracy
 
-#### Adding More AI Judges
-To use Claude:
-```bash
-agentuity env set --secret ANTHROPIC_API_KEY=your_api_key_here
-```
 
 To add other models (Grok, Llama, Mistral), install the appropriate SDK and update the Jury agent code.
 
