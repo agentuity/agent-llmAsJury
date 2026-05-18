@@ -1,39 +1,79 @@
-import { runner } from '@agentuity/sdk';
+import { buildArticlePrompt } from './src/agents/ContentWriter';
+import { mastra } from './src/mastra';
 
-if (!process.env.AGENTUITY_API_KEY && !process.env.AGENTUITY_SDK_KEY) {
-  console.error(
-    '\x1b[31m[ERROR] AGENTUITY_API_KEY or AGENTUITY_SDK_KEY is not set. This should have been set automatically by the Agentuity CLI or picked up from the .env file.\x1b[0m'
-  );
-  const cmd = process.env._ || '';
-  if (cmd.endsWith('node')) {
-    console.error(
-      '\x1b[31m[ERROR] Re-run the command with `node --env-file .env index.ts`\x1b[0m'
-    );
+function usage() {
+  console.error('Usage:');
+  console.error('  bun run index.ts write <topic>');
+  console.error('  bun run index.ts evaluate <article text>');
+  console.error('  bun run index.ts workflow <topic>');
+}
+
+function assertSuccess<T extends { status: string }>(
+  label: string,
+  result: T
+): Extract<T, { status: 'success' }> {
+  if (result.status === 'success') {
+    return result as Extract<T, { status: 'success' }>;
   }
+
+  if (result.status === 'failed' && 'error' in result) {
+    throw result.error;
+  }
+
+  throw new Error(`${label} finished with status ${result.status}.`);
+}
+
+async function main() {
+  const [command, ...args] = process.argv.slice(2);
+  const input = args.join(' ').trim();
+
+  if (!command || !input) {
+    usage();
+    process.exit(1);
+  }
+
+  if (command === 'write') {
+    const agent = mastra.getAgent('contentWriterAgent');
+    const response = await agent.generate(buildArticlePrompt(input));
+    console.log(response.text);
+    return;
+  }
+
+  if (command === 'evaluate') {
+    const workflow = mastra.vnext_getWorkflow('juryWorkflow');
+    const run = await workflow.createRun();
+    const result = assertSuccess(
+      'jury workflow',
+      await run.start({ inputData: { article: input } })
+    );
+
+    console.log(result.result.formattedReport);
+    return;
+  }
+
+  if (command === 'workflow') {
+    const workflow = mastra.vnext_getWorkflow('contentJuryWorkflow');
+    const run = await workflow.createRun();
+    const result = assertSuccess(
+      'content jury workflow',
+      await run.start({ inputData: { topic: input } })
+    );
+
+    console.log(result.result.formattedReport);
+    return;
+  }
+
+  usage();
   process.exit(1);
 }
 
-if (!process.env.AGENTUITY_URL) {
-  console.warn(
-    '\x1b[31m[WARN] You are running this agent outside of the Agentuity environment. Any automatic Agentuity features will be disabled.\x1b[0m'
-  );
-  if (process.isBun) {
-    console.warn(
-      '\x1b[31m[WARN] Recommend running `agentuity dev` to run your project locally instead of bun run start.\x1b[0m'
-    );
+main().catch((error) => {
+  if (error instanceof Error) {
+    console.error(error.message);
+    console.error(error.stack);
   } else {
-    console.warn(
-      '\x1b[31m[WARN] Recommend running `agentuity dev` to run your project locally instead of npm start.\x1b[0m'
-    );
+    console.error(error);
   }
-}
 
-runner(true, import.meta.dirname).catch((err) => {
-  if (err instanceof Error) {
-    console.error(err.message);
-    console.error(err.stack);
-  } else {
-    console.error(err);
-  }
   process.exit(1);
 });
