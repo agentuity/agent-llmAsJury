@@ -4,9 +4,7 @@
     "allowJs": true,
     "esModuleInterop": true,
     "jsx": "react-jsx",
-    "lib": [
-      "ESNext"
-    ],
+    "lib": ["ESNext"],
     "module": "ESNext",
     "moduleDetection": "force",
     "moduleResolution": "bundler",
@@ -19,10 +17,7 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "ESNext",
-    "types": [
-      "@types/bun",
-      "@agentuity/sdk"
-    ],
+    "types": ["@types/bun"],
     "verbatimModuleSyntax": true
   }
 }
